@@ -1,29 +1,63 @@
 import os
-import sys
-import io
 from dotenv import load_dotenv
-from google import genai
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.prompts import PromptTemplate
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
+from pydantic import Field, BaseModel
+from langchain.globals import set_debug
 
-
-os.environ["PYTHONIOENCODING"] = "utf-8"
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+set_debug(True)
 
 load_dotenv()
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+api_key = os.getenv("GOOGLE_API_KEY")
 
-try:
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents="Gere um roteiro de 1 dia sobre música no Brasil. Responda com acentos."
-    )
+class Destino(BaseModel):
+    cidade:str = Field("A cidade recomendada para visitar")
+    motivo:str = Field("motivo pelo qual é interessante visitar essa cidade")
+
+class Restaurantes(BaseModel):
+    cidade:str = Field("A cidade recomendada para visitar")
+    motivo:str = Field("Restaurantes recomendados na cidade")
     
-    print("\n" + "="*50)
-    print(response.text)
-    print("="*50)
+parseador_destino = JsonOutputParser(pydantic_object=Destino)
+parseador_restaurantes = JsonOutputParser(pydantic_object=Restaurantes)
 
-except Exception as e:
-    if "503" in str(e):
-        print("Servidor do Google lotado. Tente de novo em 10 segundos!")
-    else:
-        print(f"Erro: {e}")
-        
+prompt_cidade = PromptTemplate(
+    template="""
+    Sugira uma cidade dado o meu interesse por {interesse},
+    {formato_de_saida}
+    """,
+    input_variables=["interesse"],
+    partial_variables={"formato_de_saida": parseador_destino.get_format_instructions()}
+)
+
+prompt_restaurantes = PromptTemplate(
+    template="""
+    Sugira restaurantes populares entre locais em {cidade},
+    {formato_de_saida}
+    """,
+    partial_variables={"formato_de_saida": parseador_restaurantes.get_format_instructions()}
+)
+
+prompt_cultural = PromptTemplate(
+    template="Sugira atividades e locais culturais em {cidade}"
+)
+
+modelo = ChatGoogleGenerativeAI(
+    model="gemini-3-flash-preview",
+    temperature=0.5,
+    api_key=api_key
+)
+
+cadeia_1 = prompt_cidade | modelo | parseador_destino
+cadeia_2 = prompt_restaurantes | modelo | parseador_restaurantes
+cadeia_3 = prompt_cultural | modelo | StrOutputParser()
+
+cadeia = (cadeia_1 | cadeia_2 | cadeia_3)
+
+resposta = cadeia.invoke(
+    {
+        "interesse" : "praias"
+    }
+)
+print(resposta)
